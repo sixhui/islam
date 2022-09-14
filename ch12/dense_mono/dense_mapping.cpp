@@ -70,18 +70,6 @@ bool update(
     Mat &depth_cov2
 );
 
-/**
- * 极线搜索
- * @param ref           参考图像
- * @param curr          当前图像
- * @param T_C_R         位姿
- * @param pt_ref        参考图像中点的位置
- * @param depth_mu      深度均值
- * @param depth_cov     深度方差
- * @param pt_curr       当前点
- * @param epipolar_direction  极线方向
- * @return              是否成功
- */
 bool epipolarSearch(
     const Mat &ref,
     const Mat &curr,
@@ -138,7 +126,12 @@ inline double getBilinearInterpolatedValue(const Mat &img, const Vector2d &pt) {
 // 显示估计的深度图
 void plotDepth(const Mat &depth_truth, const Mat &depth_estimate);
 
-// 像素到相机坐标系
+/**
+ * 像素到相机坐标系
+ *
+ * @param px 像素坐标
+ * @return
+ */
 inline Vector3d px2cam(const Vector2d px) {
     return Vector3d(
         (px(0, 0) - cx) / fx,
@@ -155,7 +148,11 @@ inline Vector2d cam2px(const Vector3d p_cam) {
     );
 }
 
-// 检测一个点是否在图像边框内
+/**
+ * 检测一个点是否在图像边框内
+ * @param pt
+ * @return      点在图像内返回 True
+ */
 inline bool inside(const Vector2d &pt) {
     return pt(0, 0) >= boarder && pt(1, 0) >= boarder
            && pt(0, 0) + boarder < width && pt(1, 0) + boarder <= height;
@@ -174,17 +171,12 @@ void evaludateDepth(const Mat &depth_truth, const Mat &depth_estimate);
 
 
 int main(int argc, char **argv) {
-//    if (argc != 2) {
-//        cout << "Usage: dense_mapping path_to_test_dataset" << endl;
-//        return -1;
-//    }
-
     string path = "/home/liuxh/code/islam/ch12/test_data";
 
-    // 从数据集读取数据
-    vector<string> color_image_files;
-    vector<SE3d> poses_TWC;
-    Mat ref_depth;
+    /// 从数据集读取数据
+    vector<string>  color_image_files;
+    vector<SE3d>    poses_TWC;
+    Mat             ref_depth;
     bool ret = readDatasetFiles(path, color_image_files, poses_TWC, ref_depth);
     if (ret == false) {
         cout << "Reading image files failed!" << endl;
@@ -192,25 +184,29 @@ int main(int argc, char **argv) {
     }
     cout << "read total " << color_image_files.size() << " files." << endl;
 
-    // 第一张图
-    Mat ref = imread(color_image_files[0], 0);                // gray-scale image
-    SE3d pose_ref_TWC = poses_TWC[0];
-    double init_depth = 3.0;    // 深度初始值
-    double init_cov2 = 3.0;     // 方差初始值
-    Mat depth(height, width, CV_64F, init_depth);             // 深度图
-    Mat depth_cov2(height, width, CV_64F, init_cov2);         // 深度图方差
+    /// 第一张图 - 参考帧
+    Mat ref             = imread(color_image_files[0], 0);          // gray-scale image
+    SE3d pose_T_WR      = poses_TWC[0];
+    double init_depth   = 3.0;      // 深度初始值
+    double init_cov2    = 3.0;      // 方差初始值
+    Mat depth(height, width, CV_64F, init_depth);               // 深度图
+    Mat depth_cov2(height, width, CV_64F, init_cov2);           // 深度图方差
 
+    /// 遍历后续所有图像
     for (int index = 1; index < color_image_files.size(); index++) {
         cout << "*** loop " << index << " ***" << endl;
-        Mat curr = imread(color_image_files[index], 0);
+        Mat curr            = imread(color_image_files[index], 0);
         if (curr.data == nullptr) continue;
-        SE3d pose_curr_TWC = poses_TWC[index];
-        SE3d pose_T_C_R = pose_curr_TWC.inverse() * pose_ref_TWC;   // 坐标转换关系： T_C_W * T_W_R = T_C_R
-        update(ref, curr, pose_T_C_R, depth, depth_cov2);
+        SE3d pose_T_WC      = poses_TWC[index];
+        SE3d pose_T_CR      = pose_T_WC.inverse() * pose_T_WR;   // 坐标转换关系： T_CW * T_WR = T_CR
+
+        update(ref, curr, pose_T_CR, depth, depth_cov2);
         evaludateDepth(ref_depth, depth);
+
         plotDepth(ref_depth, depth);
         imshow("image", curr);
         waitKey(1);
+
     }
 
     cout << "estimation returns, saving depth map ..." << endl;
@@ -220,22 +216,29 @@ int main(int argc, char **argv) {
     return 0;
 }
 
-bool readDatasetFiles(
-    const string &path,
-    vector<string> &color_image_files,
-    std::vector<SE3d> &poses,
-    cv::Mat &ref_depth) {
+
+/**
+ *
+ * 数据格式：图像文件名 tx, ty, tz, qx, qy, qz, qw ，注意是 TWC 而非 TCW
+ * @param path 输入文件路径
+ * @param color_image_files 输出图像文件路径
+ * @param poses 输出所有图像文件对应的位姿
+ * @param ref_depth 输出第一帧（参考帧）的所有像素深度
+ * @return
+ */
+bool readDatasetFiles(const string &path,
+                      vector<string> &color_image_files, vector<SE3d> &poses, cv::Mat &ref_depth) {
     ifstream fin(path + "/first_200_frames_traj_over_table_input_sequence.txt");
     if (!fin) return false;
 
     while (!fin.eof()) {
         // 数据格式：图像文件名 tx, ty, tz, qx, qy, qz, qw ，注意是 TWC 而非 TCW
-        string image;
-        fin >> image;
+        string image_name;
+        fin >> image_name;
         double data[7];
         for (double &d:data) fin >> d;
 
-        color_image_files.push_back(path + string("/images/") + image);
+        color_image_files.push_back(path + string("/images/") + image_name);
         poses.push_back(
             SE3d(Quaterniond(data[6], data[3], data[4], data[5]),
                  Vector3d(data[0], data[1], data[2]))
@@ -258,25 +261,31 @@ bool readDatasetFiles(
     return true;
 }
 
-// 对整个深度图进行更新
+/**
+ * 对整个深度图 depth 进行更新
+ *
+ * @param ref       输入参考帧图像
+ * @param curr      输入当前帧
+ * @param T_C_R     输入当前帧相对参考帧位姿
+ * @param depth         输入深度均值并更新输出
+ * @param depth_cov2    输入深度方差并更新输出
+ * @return
+ */
 bool update(const Mat &ref, const Mat &curr, const SE3d &T_C_R, Mat &depth, Mat &depth_cov2) {
+    /// 遍历参考帧的每个像素
     for (int x = boarder; x < width - boarder; x++)
         for (int y = boarder; y < height - boarder; y++) {
-            // 遍历每个像素
-            if (depth_cov2.ptr<double>(y)[x] < min_cov || depth_cov2.ptr<double>(y)[x] > max_cov) // 深度已收敛或发散
+            // 深度已收敛或发散
+            if (depth_cov2.ptr<double>(y)[x] < min_cov || depth_cov2.ptr<double>(y)[x] > max_cov)
                 continue;
-            // 在极线上搜索 (x,y) 的匹配
+
+            // 在极线上搜索参考帧中点 (x,y) 的匹配
             Vector2d pt_curr;
             Vector2d epipolar_direction;
-            bool ret = epipolarSearch(
-                ref,
-                curr,
-                T_C_R,
+            bool ret = epipolarSearch(ref, curr, T_C_R,
                 Vector2d(x, y),
-                depth.ptr<double>(y)[x],
-                sqrt(depth_cov2.ptr<double>(y)[x]),
-                pt_curr,
-                epipolar_direction
+                depth.ptr<double>(y)[x], sqrt(depth_cov2.ptr<double>(y)[x]),
+                pt_curr, epipolar_direction
             );
 
             if (ret == false) // 匹配失败
@@ -290,39 +299,51 @@ bool update(const Mat &ref, const Mat &curr, const SE3d &T_C_R, Mat &depth, Mat 
         }
 }
 
-// 极线搜索
-// 方法见书 12.2 12.3 两节
-bool epipolarSearch(
-    const Mat &ref, const Mat &curr,
-    const SE3d &T_C_R, const Vector2d &pt_ref,
+/**
+ * 极线搜索 方法见书 12.2 12.3 两节
+ * 对参考帧中的一个点 (x,y)，在当前帧的极线上搜索其匹配
+ *
+ * @param ref           输入参考帧
+ * @param curr          输入当前帧
+ * @param T_C_R         输入当前帧相对参考帧的位姿
+ * @param pt_ref        ！输入点在参考帧的位置
+ * @param depth_mu      输入深度均值
+ * @param depth_cov     输入深度方差
+ * @param pt_curr               输出点在当前帧的对应位置
+ * @param epipolar_direction    输出极线方向
+ * @return
+ */
+bool epipolarSearch(const Mat &ref, const Mat &curr, const SE3d &T_C_R, const Vector2d &pt_ref,
     const double &depth_mu, const double &depth_cov,
     Vector2d &pt_curr, Vector2d &epipolar_direction) {
-    Vector3d f_ref = px2cam(pt_ref);
-    f_ref.normalize();
-    Vector3d P_ref = f_ref * depth_mu;    // 参考帧的 P 向量
 
-    Vector2d px_mean_curr = cam2px(T_C_R * P_ref); // 按深度均值投影的像素
+    /// 确定参考帧的点 pt_ref 在当前帧上的极线
+    Vector3d f_ref          = px2cam(pt_ref);           // 参考帧作为世界系，所以不需要乘外参
+    f_ref.normalize(); // 归一化，单位向量来表示一个方向
+
+    Vector2d px_mean_curr   = cam2px(T_C_R * (f_ref * depth_mu)); // 按深度均值投影的像素
     double d_min = depth_mu - 3 * depth_cov, d_max = depth_mu + 3 * depth_cov;
     if (d_min < 0.1) d_min = 0.1;
-    Vector2d px_min_curr = cam2px(T_C_R * (f_ref * d_min));    // 按最小深度投影的像素
-    Vector2d px_max_curr = cam2px(T_C_R * (f_ref * d_max));    // 按最大深度投影的像素
+    Vector2d px_min_curr    = cam2px(T_C_R * (f_ref * d_min));    // 按最小深度投影的像素
+    Vector2d px_max_curr    = cam2px(T_C_R * (f_ref * d_max));    // 按最大深度投影的像素
 
-    Vector2d epipolar_line = px_max_curr - px_min_curr;    // 极线（线段形式）
-    epipolar_direction = epipolar_line;        // 极线方向
-    epipolar_direction.normalize();
-    double half_length = 0.5 * epipolar_line.norm();    // 极线线段的半长度
-    if (half_length > 100) half_length = 100;   // 我们不希望搜索太多东西
+    Vector2d epipolar_line  = px_max_curr - px_min_curr;    // 极线（线段形式）
+    epipolar_direction      = epipolar_line;                // 极线方向
+    epipolar_direction.normalize();                         // 归一化来表示一个方向
+    double half_length      = 0.5 * epipolar_line.norm();   // 极线线段的半长度
+    if (half_length > 100) half_length = 100;               // 我们不希望搜索太多东西
 
     // 取消此句注释以显示极线（线段）
-    // showEpipolarLine( ref, curr, pt_ref, px_min_curr, px_max_curr );
+//     showEpipolarLine( ref, curr, pt_ref, px_min_curr, px_max_curr );
 
-    // 在极线上搜索，以深度均值点为中心，左右各取半长度
+    /// 遍历当前帧极线（以深度均值点为中心，左右各取半长度）上的每个像素 - 搜索 pt_ref 的匹配点
     double best_ncc = -1.0;
     Vector2d best_px_curr;
-    for (double l = -half_length; l <= half_length; l += 0.7) { // l+=sqrt(2)
-        Vector2d px_curr = px_mean_curr + l * epipolar_direction;  // 待匹配点
-        if (!inside(px_curr))
+    for (double l = -half_length; l <= half_length; l += 0.7) {     // l+=sqrt(2)
+        Vector2d px_curr = px_mean_curr + l * epipolar_direction;   // 当前帧的待匹配点
+        if (!inside(px_curr)) // 可考虑优化，减少计算量
             continue;
+
         // 计算待匹配点与参考帧的 NCC
         double ncc = NCC(ref, curr, pt_ref, px_curr);
         if (ncc > best_ncc) {
@@ -330,19 +351,27 @@ bool epipolarSearch(
             best_px_curr = px_curr;
         }
     }
+
+    /// 阈值过滤
     if (best_ncc < 0.85f)      // 只相信 NCC 很高的匹配
         return false;
     pt_curr = best_px_curr;
     return true;
 }
 
-double NCC(
-    const Mat &ref, const Mat &curr,
-    const Vector2d &pt_ref, const Vector2d &pt_curr) {
-    // 零均值-归一化互相关
-    // 先算均值
-    double mean_ref = 0, mean_curr = 0;
-    vector<double> values_ref, values_curr; // 参考帧和当前帧的均值
+/**
+ * 零均值-归一化互相
+ * @param ref
+ * @param curr
+ * @param pt_ref
+ * @param pt_curr
+ * @return
+ */
+double NCC(const Mat &ref, const Mat &curr,
+           const Vector2d &pt_ref, const Vector2d &pt_curr) {
+    /// 先算均值
+    double mean_ref = 0, mean_curr = 0;         // 参考帧和当前帧的均值
+    vector<double> values_ref, values_curr;
     for (int x = -ncc_window_size; x <= ncc_window_size; x++)
         for (int y = -ncc_window_size; y <= ncc_window_size; y++) {
             double value_ref = double(ref.ptr<uchar>(int(y + pt_ref(1, 0)))[int(x + pt_ref(0, 0))]) / 255.0;
@@ -358,7 +387,7 @@ double NCC(
     mean_ref /= ncc_area;
     mean_curr /= ncc_area;
 
-    // 计算 Zero mean NCC
+    /// 计算 Zero mean NCC
     double numerator = 0, demoniator1 = 0, demoniator2 = 0;
     for (int i = 0; i < values_ref.size(); i++) {
         double n = (values_ref[i] - mean_ref) * (values_curr[i] - mean_curr);
@@ -369,20 +398,23 @@ double NCC(
     return numerator / sqrt(demoniator1 * demoniator2 + 1e-10);   // 防止分母出现零
 }
 
-bool updateDepthFilter(
-    const Vector2d &pt_ref,
-    const Vector2d &pt_curr,
-    const SE3d &T_C_R,
-    const Vector2d &epipolar_direction,
-    Mat &depth,
-    Mat &depth_cov2) {
-    // 不知道这段还有没有人看
+/**
+ *
+ * @param pt_ref                输入参考帧上的点
+ * @param pt_curr               输入当前帧上的对应点
+ * @param T_C_R                 输入当前帧相对参考帧的位姿
+ * @param epipolar_direction    输入当前帧的极线方向
+ * @param depth             输出参考帧上的点 pt_ref 对应的空间点深度
+ * @param depth_cov2        输出参考帧上的点 pt_ref 对应的空间点深度方差
+ * @return
+ */
+bool updateDepthFilter(const Vector2d &pt_ref, const Vector2d &pt_curr, const SE3d &T_C_R,
+                       const Vector2d &epipolar_direction,
+                       Mat &depth, Mat &depth_cov2) {
     // 用三角化计算深度
-    SE3d T_R_C = T_C_R.inverse();
-    Vector3d f_ref = px2cam(pt_ref);
-    f_ref.normalize();
-    Vector3d f_curr = px2cam(pt_curr);
-    f_curr.normalize();
+    SE3d T_R_C      = T_C_R.inverse();
+    Vector3d f_ref  = px2cam(pt_ref); f_ref.normalize();
+    Vector3d f_curr = px2cam(pt_curr); f_curr.normalize();
 
     // 方程
     // d_ref * f_ref = d_cur * ( R_RC * f_cur ) + t_RC
@@ -390,17 +422,17 @@ bool updateDepthFilter(
     // 转化成下面这个矩阵方程组
     // => [ f_ref^T f_ref, -f_ref^T f2 ] [d_ref]   [f_ref^T t]
     //    [ f_2^T f_ref, -f2^T f2      ] [d_cur] = [f2^T t   ]
-    Vector3d t = T_R_C.translation();
+    Vector3d t  = T_R_C.translation();
     Vector3d f2 = T_R_C.so3() * f_curr;
-    Vector2d b = Vector2d(t.dot(f_ref), t.dot(f2));
+    Vector2d b  = Vector2d(t.dot(f_ref), t.dot(f2));
     Matrix2d A;
     A(0, 0) = f_ref.dot(f_ref);
     A(0, 1) = -f_ref.dot(f2);
     A(1, 0) = -A(0, 1);
     A(1, 1) = -f2.dot(f2);
-    Vector2d ans = A.inverse() * b;
-    Vector3d xm = ans[0] * f_ref;           // ref 侧的结果
-    Vector3d xn = t + ans[1] * f2;          // cur 结果
+    Vector2d ans    = A.inverse() * b;
+    Vector3d xm     = ans[0] * f_ref;           // ref 侧的结果
+    Vector3d xn     = t + ans[1] * f2;          // cur 结果
     Vector3d p_esti = (xm + xn) / 2.0;      // P的位置，取两者的平均
     double depth_estimation = p_esti.norm();   // 深度值
 

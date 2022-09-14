@@ -18,7 +18,10 @@
 #define PATH_ZZY            PROJECT_PATH"zzy/"
 #define PATH_ZZY_IMGS_PTN   PATH_ZZY"images/*.jpg"
 
-extern const cv::Mat K = (cv::Mat_<double>(3, 3) << 520.9, 0, 325.1, 0, 521.0, 249.7, 0, 0, 1);
+extern const cv::Mat K = (cv::Mat_<double>(3, 3) <<
+        520.9, 0, 325.1,
+        0, 521.0, 249.7,
+        0, 0, 1);
 
 
 std::string path_concat(std::string pre, std::string file){
